@@ -3,9 +3,13 @@ use std::{marker::PhantomData};
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner},
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector, TableColumn},
-    poly::Rotation,
+    plonk::*,
+    poly::{commitment::Params, commitment::ParamsVerifier, Rotation},
+    transcript::{Blake2bRead, Blake2bWrite, Challenge255},
 };
+use pairing::bn256::{Bn256, Fr as Fp, G1Affine};
+use rand_core::OsRng;
+
 
 #[derive(Clone, Debug)]
 struct Number<F: FieldExt>(AssignedCell<F, F>);
@@ -15,7 +19,6 @@ struct FiboConfig {
     advice: [Column<Advice>; 3],
     s_add: Selector,
     s_xor: Selector,
-    instance: Column<Instance>,
     xor_table: [TableColumn; 3],
 }
 
@@ -51,7 +54,6 @@ impl<F: FieldExt> FiboChip<F> {
         meta: &mut ConstraintSystem<F>,
         advice: [Column<Advice>; 3],
         selector: [Selector; 2],
-        instance: Column<Instance>,
     ) -> FiboConfig {
         let s_add = selector[0];
         let s_xor = selector[1];
@@ -65,7 +67,6 @@ impl<F: FieldExt> FiboChip<F> {
         meta.enable_equality(advice[0]);
         meta.enable_equality(advice[1]);
         meta.enable_equality(advice[2]);
-        meta.enable_equality(instance);
 
         meta.lookup("xor", |meta| {
             let s_xor = meta.query_selector(s_xor);
@@ -88,7 +89,7 @@ impl<F: FieldExt> FiboChip<F> {
         });
 
         FiboConfig {
-            advice, s_add, s_xor, instance, xor_table,
+            advice, s_add, s_xor, xor_table,
         }
     }
 
@@ -191,16 +192,6 @@ impl<F: FieldExt> FiboChip<F> {
         )
     }
 
-    fn expose_public(
-        &self,
-        mut layouter: impl Layouter<F>,
-        num: Number<F>,
-        row: usize,
-    ) -> Result<(), Error> {
-        let config = self.config();
-        layouter.constrain_instance(num.0.cell(), config.instance, row)
-    }
-
     fn load_table(
         &self,
         mut layouter: impl Layouter<F>,
@@ -261,8 +252,7 @@ impl<F: FieldExt> Circuit<F> for FiboCircuit<F> {
             meta.advice_column(),
         ];
         let selector = [meta.selector(), meta.complex_selector()];
-        let instance = meta.instance_column();
-        FiboChip::configure(meta, advice, selector, instance)
+        FiboChip::configure(meta, advice, selector)
     }
 
     fn synthesize(
@@ -292,7 +282,6 @@ impl<F: FieldExt> Circuit<F> for FiboCircuit<F> {
             b = c;
             c = new_c;
         }
-        chip.expose_public(layouter.namespace(|| "expose c"), c, 0)?;
         chip.load_table(layouter.namespace(|| "lookup table"))?;
         Ok(())
     }
@@ -310,12 +299,9 @@ fn get_sequence(a: u64, b: u64, c: u64, num: usize) -> Vec<u64> {
 }
 
 fn main() {
-    use halo2_proofs::{dev::MockProver, pairing::bn256::Fr as Fp};
-
     // Prepare the private and public inputs to the circuit!
     let num = 14;
     let seq = get_sequence(1, 3, 2, num);
-    let res = Fp::from(seq[num - 1]);
     println!("{:?}", seq);
 
     // Instantiate the circuit with the private inputs.
@@ -326,19 +312,35 @@ fn main() {
         num,
     };
 
-    // Arrange the public input. We expose the multiplication result in row 0
-    // of the instance column, so we position it there in our public inputs.
-    let mut public_inputs = vec![res];
-
     // Set circuit size
     let k = 11;
 
-    // Given the correct public input, our circuit will verify.
-    let prover = MockProver::run(k, &circuit, vec![public_inputs.clone()]).unwrap();
-    assert_eq!(prover.verify(), Ok(()));
+    // Initialize the polynomial commitment parameters
+    let params: Params<G1Affine> = Params::<G1Affine>::unsafe_setup::<Bn256>(k);
+    let params_verifier: ParamsVerifier<Bn256> = params.verifier(0).unwrap();
 
-    // If we try some other public input, the proof will fail!
-    public_inputs[0] += Fp::one();
-    let prover = MockProver::run(k, &circuit, vec![public_inputs]).unwrap();
-    assert!(prover.verify().is_err());
+    // Initialize the proving key and verification key
+    let vk = keygen_vk(&params, &circuit).expect("keygen_vk should not fail");
+    let pk = keygen_pk(&params, vk, &circuit).expect("keygen_pk should not fail");
+
+    // Create a proof
+    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+
+    create_proof(&params, &pk, &[circuit], &[&[]], OsRng, &mut transcript)
+        .expect("proof generation should not fail");
+
+    let proof = transcript.finalize();
+
+    // Verify the proof
+    let strategy = SingleVerifier::new(&params_verifier);
+    let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+
+    verify_proof(
+        &params_verifier,
+        pk.get_vk(),
+        strategy,
+        &[&[]],
+        &mut transcript,
+    )
+    .unwrap();
 }
