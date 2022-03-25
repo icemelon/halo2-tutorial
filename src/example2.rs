@@ -139,7 +139,7 @@ impl<F: FieldExt> Circuit<F> for FiboCircuit<F> {
             meta.advice_column(),
             meta.advice_column(),
         ];
-        let selector = meta.complex_selector();
+        let selector = meta.selector();
         let instance = meta.instance_column();
         FiboChip::configure(meta, advice, selector, instance)
     }

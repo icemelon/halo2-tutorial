@@ -70,37 +70,37 @@ impl<F: FieldExt> FiboChip<F> {
         a: F,
         b: F,
     ) -> Result<(Number<F>, Number<F>, Number<F>), Error> {
-        let out = layouter.assign_region(
-            || "add",
+        // load first row
+        layouter.assign_region(
+            || "first row",
             |mut region| {
                 // enable the selector
                 self.config.s.enable(&mut region, 0)?;
 
                 let a_num = region.assign_advice(
                     || "a",
-                    self.config.a,
-                    0,
+                    self.config.a, // column a
+                    0, // rotation
                     || Ok(a),
                 ).map(Number)?;
 
                 let b_num = region.assign_advice(
                     || "b",
-                    self.config.b,
-                    0,
+                    self.config.b, // column b
+                    0, // rotation
                     || Ok(b),
                 ).map(Number)?;
 
                 let c_num = region.assign_advice(
                     || "c",
-                    self.config.c,
-                    0,
+                    self.config.c, // column c
+                    0, // rotation
                     || Ok(a + b),
                 ).map(Number)?;
 
                 Ok((a_num, b_num, c_num))
             },
-        );
-        out
+        )
     }
 
     fn load_row(
@@ -110,7 +110,7 @@ impl<F: FieldExt> FiboChip<F> {
         b: &Number<F>,
     ) -> Result<Number<F>, Error> {
         layouter.assign_region(
-            || "add",
+            || "row",
             |mut region| {
                 // enable the selector
                 self.config.s.enable(&mut region, 0)?;
