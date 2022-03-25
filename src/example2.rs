@@ -49,7 +49,10 @@ impl<F: FieldExt> FiboChip<F> {
             let b1 = meta.query_advice(b, Rotation::prev());
             let a2 = meta.query_advice(a, Rotation::cur());
             let b2 = meta.query_advice(b, Rotation::cur());
-            vec![s.clone() * (a2.clone() - b1.clone() - a1), s * (b2 - a2 - b1)]
+            vec![
+                s.clone() * (a2.clone() - b1.clone() - a1),
+                s * (b2 - a2 - b1),
+            ]
         });
 
         FiboConfig {
@@ -85,7 +88,9 @@ impl<F: FieldExt> FiboChip<F> {
 
                 for idx in 1..nrows {
                     self.config.selector.enable(&mut region, idx)?;
-                    let a2 = a.0.value().and_then(|a| b.0.value().map(|b| *a + *b));
+                    let a2 = a.0.value().and_then(
+                        |a| b.0.value().map(|b| *a + *b),
+                    );
                     let b2 = a2.and_then(|a| b.0.value().map(|b| a + *b));
 
                     a = region.assign_advice(

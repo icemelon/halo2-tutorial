@@ -171,6 +171,7 @@ dependencies = [
  "ff",
  "halo2_proofs",
  "pairing_bn256",
+ "rand_core",
 ]
 
 [[package]]
